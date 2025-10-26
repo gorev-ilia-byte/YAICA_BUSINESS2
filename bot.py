@@ -564,7 +564,7 @@ def open_box(user_id, box_id):
                 elif 'Алмазных' in reward:
                     egg_type = "💎 Алмазное яйцо"
                     egg_chance = 15  # 15% шанс
-                elif 'Мемных' in reward:
+                elif 'Мемных' in reward:  # ← ИСПРАВЛЕНО: 'в' на 'in'
                     egg_type = "🔥 Мемное яйцо"
                     egg_chance = 5  # 5% шанс
                 else:
@@ -963,6 +963,32 @@ async def admin_create_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(
             f"❌ Использование: /create_code <код> <yaic/egg/business> <значение> <предмет> <использования>\nПример: /create_code TEST123 yaic 5000 '' 100")
+
+
+async def fix_nicknames(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только для админа!")
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Находим игроков с None ником
+    cursor.execute('SELECT user_id, username FROM players WHERE nickname IS NULL OR nickname = "None"')
+    players = cursor.fetchall()
+
+    fixed_count = 0
+    for user_id, username in players:
+        if username and username != "Неизвестно":
+            new_nickname = f"@{username}"
+        else:
+            new_nickname = f"Игрок_{user_id}"
+
+        cursor.execute('UPDATE players SET nickname = ? WHERE user_id = ?', (new_nickname, user_id))
+        fixed_count += 1
+
+    conn.commit()
+    await update.message.reply_text(f"✅ Исправлено ников: {fixed_count}")
 
 
 # Команда для загрузки картинок
@@ -1414,6 +1440,12 @@ async def show_dashboard(update, context: ContextTypes.DEFAULT_TYPE):
 
     nickname, balance = player[2], player[3]
 
+    # Исправляем отображение None ника
+    if nickname is None:
+        display_nickname = "Без ника"
+    else:
+        display_nickname = nickname
+
     player_businesses = get_player_businesses(user_id)
     total_income_per_30min = sum(income for _, _, income, _ in player_businesses)
 
@@ -1426,7 +1458,7 @@ async def show_dashboard(update, context: ContextTypes.DEFAULT_TYPE):
     text = f"""
 🏠 <b>Личный кабинет</b>
 
-👤 Игрок: {nickname}
+👤 Игрок: {display_nickname}
 💵 Баланс: {balance} YAIC
 {loan_text}📈 Пассивный доход: {total_income_per_30min} YAIC/30мин
 🏢 Бизнесов: {len(player_businesses)}
@@ -1467,9 +1499,15 @@ async def show_top_players(query, context: ContextTypes.DEFAULT_TYPE):
         text += "😔 Пока нет игроков в рейтинге"
     else:
         for i, (nickname, balance, income) in enumerate(top_players, 1):
+            # Исправляем отображение None
+            if nickname is None:
+                display_name = "Без ника"
+            else:
+                display_name = nickname
+
             income = income or 0
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            text += f"{medal} {nickname}\n"
+            text += f"{medal} {display_name}\n"
             text += f"   💵 {balance} YAIC | 📈 {income} YAIC/30мин\n\n"
 
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="dashboard")]]
@@ -1809,7 +1847,9 @@ async def show_friends_menu(query, context: ContextTypes.DEFAULT_TYPE):
     else:
         text += "✅ <b>Ваши друзья:</b>\n"
         for friend_id, nickname in friends:
-            text += f"{nickname} (ID: {friend_id})\n"
+            # Исправляем отображение None
+            display_nickname = nickname if nickname else "Без ника"
+            text += f"{display_nickname} (ID: {friend_id})\n"
 
     text += "\n🎯 Выберите действие:"
 
@@ -1819,7 +1859,9 @@ async def show_friends_menu(query, context: ContextTypes.DEFAULT_TYPE):
 
     if friends:
         for friend_id, nickname in friends:
-            keyboard.append([InlineKeyboardButton(f"❌ Удалить {nickname}", callback_data=f"remove_friend_{friend_id}")])
+            display_nickname = nickname if nickname else "Без ника"
+            keyboard.append(
+                [InlineKeyboardButton(f"❌ Удалить {display_nickname}", callback_data=f"remove_friend_{friend_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="dashboard")])
 
@@ -1865,7 +1907,9 @@ async def show_trades_menu(query, context: ContextTypes.DEFAULT_TYPE):
     else:
         text += "⏳ <b>Ожидающие трейды:</b>\n"
         for trade_id, from_user_id, to_user_id, item_type, item_id, price, nickname, item_name in pending_trades:
-            text += f"{nickname} предлагает {item_name} за {price} YAIC\n"
+            # Исправляем отображение None
+            display_nickname = nickname if nickname else "Без ника"
+            text += f"{display_nickname} предлагает {item_name} за {price} YAIC\n"
         text += "\n"
 
     text += "🎯 Выберите действие:"
@@ -1873,6 +1917,7 @@ async def show_trades_menu(query, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     if pending_trades:
         for trade_id, from_user_id, to_user_id, item_type, item_id, price, nickname, item_name in pending_trades:
+            display_nickname = nickname if nickname else "Без ника"
             keyboard.append([InlineKeyboardButton(f"✅ Принять {item_name} за {price}YAIC",
                                                   callback_data=f"accept_trade_{trade_id}")])
             keyboard.append(
@@ -1897,7 +1942,8 @@ async def create_business_trade_handler(query, context: ContextTypes.DEFAULT_TYP
 
     keyboard = []
     for friend_id, nickname in friends:
-        keyboard.append([InlineKeyboardButton(f"{nickname}", callback_data=f"select_friend_{friend_id}")])
+        display_nickname = nickname if nickname else "Без ника"
+        keyboard.append([InlineKeyboardButton(f"{display_nickname}", callback_data=f"select_friend_{friend_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="inventory_businesses")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1921,7 +1967,8 @@ async def create_egg_trade_handler(query, context: ContextTypes.DEFAULT_TYPE, eg
 
     keyboard = []
     for friend_id, nickname in friends:
-        keyboard.append([InlineKeyboardButton(f"{nickname}", callback_data=f"select_friend_{friend_id}")])
+        display_nickname = nickname if nickname else "Без ника"
+        keyboard.append([InlineKeyboardButton(f"{display_nickname}", callback_data=f"select_friend_{friend_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="inventory_eggs")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2172,6 +2219,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("give_yaic", admin_give_yaic))
     application.add_handler(CommandHandler("create_code", admin_create_code))
+    application.add_handler(CommandHandler("fix_nicks", fix_nicknames))
     application.add_handler(CommandHandler("upload_images", upload_images))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -2186,6 +2234,7 @@ def main():
     print("🔄 Система трейдов")
     print("🎫 Система промокодов")
     print("👥 Реферальная система")
+    print("🔧 Команда для исправления ников: /fix_nicks")
 
     print("🚀 Бот запускается...")
     application.run_polling()
