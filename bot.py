@@ -2,6 +2,7 @@ import logging
 import sqlite3
 import os
 import random
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Токен бота
 BOT_TOKEN = "8338962499:AAF0KswedJ_LjBBexenXuymbozyS7xxiZmQ"
+ADMIN_ID = 5818997833  # ← ЗАМЕНИ НА СВОЙ ID
 
 # Глобальное соединение с базой данных
 DB_CONNECTION = None
@@ -38,46 +40,32 @@ def init_db():
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS players
                    (
-                       user_id
-                       INTEGER
-                       PRIMARY
-                       KEY,
-                       username
-                       TEXT,
-                       nickname
-                       TEXT,
-                       balance
-                       INTEGER
-                       DEFAULT
-                       5000,
-                       last_income_collection
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       created_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP
+                       user_id INTEGER PRIMARY KEY,
+                       username TEXT,
+                       nickname TEXT,
+                       balance INTEGER DEFAULT 5000,
+                       last_income_collection TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                    )
                    ''')
+
+    # === БЕЗОПАСНОЕ ДОБАВЛЕНИЕ ПОЛЕЙ ===
+    cursor.execute("PRAGMA table_info(players)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'last_box_open' not in columns:
+        cursor.execute('ALTER TABLE players ADD COLUMN last_box_open TIMESTAMP')
+    if 'referrer_id' not in columns:
+        cursor.execute('ALTER TABLE players ADD COLUMN referrer_id INTEGER')
 
     # Таблица бизнесов
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS businesses
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       name
-                       TEXT,
-                       price
-                       INTEGER,
-                       income
-                       INTEGER,
-                       description
-                       TEXT
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       name TEXT,
+                       price INTEGER,
+                       income INTEGER,
+                       description TEXT
                    )
                    ''')
 
@@ -85,71 +73,29 @@ def init_db():
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS player_businesses
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       user_id
-                       INTEGER,
-                       business_id
-                       INTEGER,
-                       purchased_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       FOREIGN
-                       KEY
-                   (
-                       user_id
-                   ) REFERENCES players
-                   (
-                       user_id
-                   ),
-                       FOREIGN KEY
-                   (
-                       business_id
-                   ) REFERENCES businesses
-                   (
-                       id
-                   ),
-                       UNIQUE
-                   (
-                       user_id,
-                       business_id
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER,
+                       business_id INTEGER,
+                       purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       FOREIGN KEY (user_id) REFERENCES players (user_id),
+                       FOREIGN KEY (business_id) REFERENCES businesses (id),
+                       UNIQUE (user_id, business_id)
                    )
-                       )
                    ''')
 
     # Таблица яиц
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS eggs
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       name
-                       TEXT,
-                       price
-                       INTEGER,
-                       image_file_id
-                       TEXT,
-                       description
-                       TEXT,
-                       limit_count
-                       INTEGER,
-                       current_count
-                       INTEGER
-                       DEFAULT
-                       0,
-                       base_price
-                       INTEGER,
-                       last_restock
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       name TEXT,
+                       price INTEGER,
+                       image_file_id TEXT,
+                       description TEXT,
+                       limit_count INTEGER,
+                       current_count INTEGER DEFAULT 0,
+                       base_price INTEGER,
+                       last_restock TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                    )
                    ''')
 
@@ -157,91 +103,40 @@ def init_db():
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS player_eggs
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       user_id
-                       INTEGER,
-                       egg_id
-                       INTEGER,
-                       purchased_price
-                       INTEGER,
-                       purchased_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       FOREIGN
-                       KEY
-                   (
-                       user_id
-                   ) REFERENCES players
-                   (
-                       user_id
-                   ),
-                       FOREIGN KEY
-                   (
-                       egg_id
-                   ) REFERENCES eggs
-                   (
-                       id
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER,
+                       egg_id INTEGER,
+                       purchased_price INTEGER,
+                       purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       FOREIGN KEY (user_id) REFERENCES players (user_id),
+                       FOREIGN KEY (egg_id) REFERENCES eggs (id)
                    )
-                       )
                    ''')
 
     # Таблица друзей
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS friends
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       user_id
-                       INTEGER,
-                       friend_id
-                       INTEGER,
-                       created_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       UNIQUE
-                   (
-                       user_id,
-                       friend_id
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER,
+                       friend_id INTEGER,
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       UNIQUE (user_id, friend_id)
                    )
-                       )
                    ''')
 
     # Таблица трейдов
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS trades
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       from_user_id
-                       INTEGER,
-                       to_user_id
-                       INTEGER,
-                       item_type
-                       TEXT,
-                       item_id
-                       INTEGER,
-                       price
-                       INTEGER,
-                       status
-                       TEXT
-                       DEFAULT
-                       'pending',
-                       created_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       from_user_id INTEGER,
+                       to_user_id INTEGER,
+                       item_type TEXT,
+                       item_id INTEGER,
+                       price INTEGER,
+                       status TEXT DEFAULT 'pending',
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                    )
                    ''')
 
@@ -249,17 +144,10 @@ def init_db():
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS boxes
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       name
-                       TEXT,
-                       price
-                       INTEGER,
-                       rewards
-                       TEXT
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       name TEXT,
+                       price INTEGER,
+                       rewards TEXT
                    )
                    ''')
 
@@ -267,43 +155,54 @@ def init_db():
     cursor.execute('''
                    CREATE TABLE IF NOT EXISTS loans
                    (
-                       id
-                       INTEGER
-                       PRIMARY
-                       KEY
-                       AUTOINCREMENT,
-                       user_id
-                       INTEGER,
-                       amount
-                       INTEGER,
-                       interest_rate
-                       INTEGER,
-                       remaining_amount
-                       INTEGER,
-                       created_at
-                       TIMESTAMP
-                       DEFAULT
-                       CURRENT_TIMESTAMP,
-                       FOREIGN
-                       KEY
-                   (
-                       user_id
-                   ) REFERENCES players
-                   (
-                       user_id
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER,
+                       amount INTEGER,
+                       interest_rate INTEGER,
+                       remaining_amount INTEGER,
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       FOREIGN KEY (user_id) REFERENCES players (user_id)
                    )
-                       )
+                   ''')
+
+    # Таблица кодов
+    cursor.execute('''
+                   CREATE TABLE IF NOT EXISTS promo_codes
+                   (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       code TEXT UNIQUE,
+                       reward_type TEXT,
+                       reward_value INTEGER,
+                       reward_item TEXT,
+                       uses_left INTEGER,
+                       expires_at TIMESTAMP,
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                   )
+                   ''')
+
+    # Таблица использованных кодов
+    cursor.execute('''
+                   CREATE TABLE IF NOT EXISTS used_codes
+                   (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       user_id INTEGER,
+                       code_id INTEGER,
+                       used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       FOREIGN KEY (user_id) REFERENCES players (user_id),
+                       FOREIGN KEY (code_id) REFERENCES promo_codes (id),
+                       UNIQUE (user_id, code_id)
+                   )
                    ''')
 
     # Проверяем, нужно ли заполнить начальные данные
     cursor.execute('SELECT COUNT(*) FROM businesses')
     if cursor.fetchone()[0] == 0:
         businesses_data = [
-            ("🎪 Ларёк с шаурмой", 5000, 1000, "Небольшой ларёк в проходном месте"),
+            ("🏪 Ларёк с шаурмой", 5000, 1000, "Небольшой ларёк в проходном месте"),
             ("⛽ АЗС 42-й бензин", 25000, 5000, "Эксклюзивный бензин премиум-класса"),
             ("🏢 Офисный центр", 100000, 20000, "Айтишники работают 24/7"),
             ("🎮 Игровая студия", 500000, 100000, "Разрабатываем хайповые игры"),
-            ("🚀 IT Корпорация", 2000000, 400000, "Поглощаем стартапы за YAICи")
+            ("💻 IT Корпорация", 2000000, 400000, "Поглощаем стартапы за YAICи")
         ]
         cursor.executemany('INSERT INTO businesses (name, price, income, description) VALUES (?, ?, ?, ?)',
                            businesses_data)
@@ -313,21 +212,20 @@ def init_db():
         eggs_data = [
             ("🥚 Обычное яйцо", 2000, "", "Базовое яйцо с хорошим потенциалом роста. Отличный старт для коллекционера!",
              20, 0, 2000),
-            ("💰 Золотое яйцо", 8000, "", "Редкое золотое яйцо, блестит на солнце. Ценный актив для инвесторов!", 10, 0,
+            ("🥚 Золотое яйцо", 8000, "", "Редкое золотое яйцо, блестит на солнце. Ценный актив для инвесторов!", 10, 0,
              8000),
             ("💎 Алмазное яйцо", 32000, "",
              "Эпическое алмазное яйцо исключительной редкости. Мечта каждого коллекционера!", 5, 0, 32000),
-            ("🧠 Мемное яйцо", 100000, "", "Легендарное мемное яйцо с вирусным потенциалом! Ультра-редкий экземпляр!", 3,
+            ("🔥 Мемное яйцо", 100000, "", "Легендарное мемное яйцо с вирусным потенциалом! Ультра-редкий экземпляр!", 3,
              0, 100000)
         ]
         cursor.executemany(
             'INSERT INTO eggs (name, price, image_file_id, description, limit_count, current_count, base_price) VALUES (?, ?, ?, ?, ?, ?, ?)',
             eggs_data)
     else:
-        # Обновляем название если яйца уже существуют
         cursor.execute('UPDATE eggs SET name = ?, description = ? WHERE name = ?',
-                       ("🧠 Мемное яйцо", "Легендарное мемное яйцо с вирусным потенциалом! Ультра-редкий экземпляр!",
-                        "🔥 Огненное яйцо"))
+                       ("🔥 Мемное яйцо", "Легендарное мемное яйцо с вирусным потенциалом! Ультра-редкий экземпляр!",
+                        "Огненное яйцо"))
 
     # Заполняем боксы с пониженной везучестью
     cursor.execute('SELECT COUNT(*) FROM boxes')
@@ -335,12 +233,12 @@ def init_db():
         boxes_data = [
             ("📦 Обычный бокс", 1000, "500-2000 YAIC|0-1 Обычных яиц|0-1 Золотых яиц"),
             ("🎁 Премиум бокс", 5000, "2000-8000 YAIC|1-2 Обычных яиц|0-1 Золотых яиц|0-1 Алмазных яиц"),
-            ("💼 Легендарный бокс", 20000, "8000-20000 YAIC|0-1 Золотых яиц|0-1 Алмазных яиц|0-1 Мемных яиц")
+            ("📫 Легендарный бокс", 20000, "8000-20000 YAIC|0-1 Золотых яиц|0-1 Алмазных яиц|0-1 Мемных яиц")
         ]
         cursor.executemany('INSERT INTO boxes (name, price, rewards) VALUES (?, ?, ?)', boxes_data)
 
     conn.commit()
-    print("✅ База данных инициализирована")
+    print("База данных инициализирована")
 
 
 # Функции для работы с базой данных
@@ -351,11 +249,12 @@ def get_player(user_id):
     return cursor.fetchone()
 
 
-def create_player(user_id, username, nickname):
+def create_player(user_id, username, nickname, referrer_id=None):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO players (user_id, username, nickname, balance) VALUES (?, ?, ?, 5000)',
-                   (user_id, username, nickname))
+    cursor.execute(
+        'INSERT OR IGNORE INTO players (user_id, username, nickname, balance, referrer_id) VALUES (?, ?, ?, 5000, ?)',
+        (user_id, username, nickname, referrer_id))
     conn.commit()
 
 
@@ -657,16 +556,16 @@ def open_box(user_id, box_id):
 
                 # Определяем тип яйца
                 if 'Обычных' in reward:
-                    egg_type = "Обычное яйцо"
+                    egg_type = "🥚 Обычное яйцо"
                     egg_chance = 60  # 60% шанс
                 elif 'Золотых' in reward:
-                    egg_type = "Золотое яйцо"
+                    egg_type = "🥚 Золотое яйцо"
                     egg_chance = 30  # 30% шанс
                 elif 'Алмазных' in reward:
-                    egg_type = "Алмазное яйцо"
+                    egg_type = "💎 Алмазное яйцо"
                     egg_chance = 15  # 15% шанс
-                elif 'Мемных' in reward:  # ИЗМЕНЕНО С ОГНЕННЫХ НА МЕМНЫЕ
-                    egg_type = "Мемное яйцо"
+                elif 'Мемных' in reward:
+                    egg_type = "🔥 Мемное яйцо"
                     egg_chance = 5  # 5% шанс
                 else:
                     continue
@@ -695,7 +594,7 @@ def open_box(user_id, box_id):
                                 rewards.append(f"{num_eggs} {egg_type}")
 
         conn.commit()
-        return rewards if rewards else ["Ничего не выпало 😢"]
+        return rewards if rewards else ["Ничего не выпало"]
 
     except Exception as e:
         print(f"Ошибка открытия бокса: {e}")
@@ -831,11 +730,11 @@ def take_loan(user_id, amount):
                        (user_id, amount, interest_rate, total_to_repay))
 
         conn.commit()
-        return True, f"✅ Кредит выдан!\n💵 Получено: {amount} YAIC\n📈 К возврату: {total_to_repay} YAIC\n🎯 Процент: {interest_rate}%"
+        return True, f"💰 Кредит выдан!\n\n💵 Получено: {amount} YAIC\n📊 К возврату: {total_to_repay} YAIC\n📈 Процент: {interest_rate}%"
 
     except Exception as e:
         print(f"Ошибка выдачи кредита: {e}")
-        return False, "Ошибка при выдаче кредита"
+        return False, "❌ Ошибка при выдаче кредита"
 
 
 def repay_loan(user_id, amount):
@@ -848,7 +747,7 @@ def repay_loan(user_id, amount):
         loan = cursor.fetchone()
 
         if not loan:
-            return False, "У вас нет активных кредитов"
+            return False, "❌ У вас нет активных кредитов"
 
         loan_id, remaining_amount = loan
 
@@ -872,11 +771,11 @@ def repay_loan(user_id, amount):
         if new_remaining <= 0:
             return True, f"✅ Кредит полностью погашен!"
         else:
-            return True, f"✅ Внесено: {amount} YAIC\n📉 Осталось выплатить: {new_remaining} YAIC"
+            return True, f"💵 Внесено: {amount} YAIC\n📊 Осталось выплатить: {new_remaining} YAIC"
 
     except Exception as e:
         print(f"Ошибка погашения кредита: {e}")
-        return False, "Ошибка при погашении кредита"
+        return False, "❌ Ошибка при погашении кредита"
 
 
 def get_loan_info(user_id):
@@ -900,20 +799,181 @@ def get_loan_info(user_id):
         return {'has_loan': False}
 
 
+# === СИСТЕМА КОДОВ ===
+def create_promo_code(code, reward_type, reward_value, reward_item, uses_left, expires_days=7):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    expires_at = datetime.now() + timedelta(days=expires_days)
+
+    try:
+        cursor.execute('''
+            INSERT INTO promo_codes (code, reward_type, reward_value, reward_item, uses_left, expires_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (code, reward_type, reward_value, reward_item, uses_left, expires_at))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def use_promo_code(user_id, code):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Проверяем существование кода
+        cursor.execute('''
+            SELECT id, reward_type, reward_value, reward_item, uses_left, expires_at 
+            FROM promo_codes 
+            WHERE code = ? AND uses_left > 0 AND expires_at > ?
+        ''', (code, datetime.now()))
+
+        promo = cursor.fetchone()
+        if not promo:
+            return False, "❌ Код не найден, истек или уже использован!"
+
+        code_id, reward_type, reward_value, reward_item, uses_left, expires_at = promo
+
+        # Проверяем, использовал ли уже пользователь этот код
+        cursor.execute('SELECT 1 FROM used_codes WHERE user_id = ? AND code_id = ?', (user_id, code_id))
+        if cursor.fetchone():
+            return False, "❌ Вы уже использовали этот код!"
+
+        # Выдаем награду
+        if reward_type == 'yaic':
+            update_balance(user_id, reward_value)
+            reward_text = f"💵 {reward_value} YAIC"
+        elif reward_type == 'egg':
+            # Находим ID яйца по имени
+            cursor.execute('SELECT id FROM eggs WHERE name = ?', (reward_item,))
+            egg_result = cursor.fetchone()
+            if egg_result:
+                egg_id = egg_result[0]
+                cursor.execute('INSERT INTO player_eggs (user_id, egg_id, purchased_price) VALUES (?, ?, 0)',
+                               (user_id, egg_id))
+                reward_text = f"🥚 {reward_item}"
+            else:
+                return False, "❌ Ошибка: указанное яйцо не найдено"
+        elif reward_type == 'business':
+            # Находим ID бизнеса по имени
+            cursor.execute('SELECT id FROM businesses WHERE name = ?', (reward_item,))
+            business_result = cursor.fetchone()
+            if business_result:
+                business_id = business_result[0]
+                cursor.execute('INSERT INTO player_businesses (user_id, business_id) VALUES (?, ?)',
+                               (user_id, business_id))
+                reward_text = f"🏢 {reward_item}"
+            else:
+                return False, "❌ Ошибка: указанный бизнес не найден"
+        else:
+            return False, "❌ Неизвестный тип награды"
+
+        # Уменьшаем количество использований и отмечаем использование
+        cursor.execute('UPDATE promo_codes SET uses_left = uses_left - 1 WHERE id = ?', (code_id,))
+        cursor.execute('INSERT INTO used_codes (user_id, code_id) VALUES (?, ?)', (user_id, code_id))
+
+        conn.commit()
+        return True, f"🎉 Поздравляем! Вы получили: {reward_text}"
+
+    except Exception as e:
+        print(f"Ошибка использования кода: {e}")
+        return False, "❌ Ошибка при использовании кода"
+
+
+def get_active_codes():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT code, reward_type, reward_value, reward_item, uses_left, expires_at
+        FROM promo_codes 
+        WHERE uses_left > 0 AND expires_at > ?
+    ''', (datetime.now(),))
+    return cursor.fetchall()
+
+
+# === РЕФЕРАЛКА ===
+def process_referral(new_user_id, referrer_id):
+    if referrer_id and referrer_id != new_user_id:
+        cursor = get_db_connection().cursor()
+        cursor.execute('SELECT 1 FROM players WHERE user_id = ?', (referrer_id,))
+        if cursor.fetchone():
+            update_balance(new_user_id, 5000)
+            update_balance(referrer_id, 5000)
+            return True
+    return False
+
+
+# === КУЛДАУН БОКСОВ ===
+def can_open_box(user_id):
+    player = get_player(user_id)
+    if not player or not player[6]:  # last_box_open
+        return True, None
+
+    last_open = datetime.fromisoformat(player[6])
+    time_passed = datetime.now() - last_open
+    seconds_passed = time_passed.total_seconds()
+
+    if seconds_passed < 120:  # 2 минуты = 120 секунд
+        seconds_remaining = 120 - int(seconds_passed)
+        return False, seconds_remaining
+
+    return True, None
+
+
+def set_box_cooldown(user_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE players SET last_box_open = ? WHERE user_id = ?', (datetime.now(), user_id))
+    conn.commit()
+
+
+# === АДМИН-КОМАНДЫ ===
+async def admin_give_yaic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только для админа!")
+        return
+    try:
+        uid, amount = int(context.args[0]), int(context.args[1])
+        update_balance(uid, amount)
+        await update.message.reply_text(f"✅ Выдано {amount} YAIC игроку {uid}")
+    except:
+        await update.message.reply_text("❌ Использование: /give_yaic <id> <сумма>")
+
+
+async def admin_create_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Только для админа!")
+        return
+
+    try:
+        # /create_code код тип значение предмет использование
+        code = context.args[0]
+        reward_type = context.args[1]  # yaic, egg, business
+        reward_value = int(context.args[2]) if reward_type == 'yaic' else 0
+        reward_item = context.args[3] if reward_type in ['egg', 'business'] else ''
+        uses_left = int(context.args[4])
+
+        if create_promo_code(code, reward_type, reward_value, reward_item, uses_left):
+            await update.message.reply_text(
+                f"✅ Промокод создан!\nКод: {code}\nНаграда: {reward_type} {reward_value} {reward_item}\nИспользований: {uses_left}")
+        else:
+            await update.message.reply_text("❌ Ошибка: код уже существует!")
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Использование: /create_code <код> <yaic/egg/business> <значение> <предмет> <использования>\nПример: /create_code TEST123 yaic 5000 '' 100")
+
+
 # Команда для загрузки картинок
 async def upload_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-
-    # Проверяем что пользователь - администратор (ЗАМЕНИ НА СВОЙ ID)
-    ADMIN_ID = 5818997833  # ЗАМЕНИ НА СВОЙ ID
-    ADMIN_ID = 5818997833  # ЗАМЕНИ НА СВОЙ ID
 
     if user_id != ADMIN_ID:
         await update.message.reply_text("❌ Эта команда только для администратора!")
         return
 
     try:
-        # Загружаем картинки яиц
         egg_files = ['egg1.png', 'egg2.png', 'egg3.png', 'egg4.png']
         file_ids = []
 
@@ -932,7 +992,6 @@ async def upload_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"Файл {egg_file} не найден")
                 file_ids.append("")
 
-        # Сохраняем file_id в базу данных
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -953,10 +1012,13 @@ async def upload_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "Неизвестно"
+    referrer_id = None
+    if context.args and context.args[0].isdigit():
+        referrer_id = int(context.args[0])
 
     try:
         if restock_eggs():
-            await update.message.reply_text("🎉 Еженедельное пополнение! Все яйца снова в продаже по базовым ценам!")
+            await update.message.reply_text("🔄 Еженедельное пополнение! Все яйца снова в продаже по базовым ценам!")
     except Exception as e:
         print(f"Ошибка при проверке пополнения: {e}")
 
@@ -969,10 +1031,170 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            "👋 Добро пожаловать в игру 'Яйца Бизнес'! \n\n"
-            "Строй бизнес, покупай редкие яйца и становись самым богатым игроком!",
+            "🎉 Добро пожаловать в игру 'Яйца Бизнес'! \n\n"
+            "💼 Строй бизнес, 🥚 покупай редкие яйца и становись самым богатым игроком!",
             reply_markup=reply_markup
         )
+        if not player:
+            create_player(user_id, username, None, referrer_id)
+            if process_referral(user_id, referrer_id):
+                await update.message.reply_text("👥 Рефералка: +5000 YAIC тебе и другу!")
+
+
+# === ПОКУПКА ЯЙЦА — 1 НА ТИП ===
+async def buy_egg(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
+    user_id = query.from_user.id
+    player = get_player(user_id)
+
+    eggs = get_eggs()
+    egg = None
+    for e in eggs:
+        if e[0] == egg_id:
+            egg = e
+            break
+
+    if not egg:
+        await context.bot.send_message(chat_id=user_id, text="❌ Яйцо не найдено!")
+        return
+
+    id, name, price, image_file_id, description, limit_count, current_count, base_price, last_restock = egg
+
+    if current_count >= limit_count:
+        await context.bot.send_message(chat_id=user_id, text="❌ Это яйцо уже раскуплено!")
+        return
+
+    # ПРОВЕРКА: УЖЕ ЕСТЬ?
+    cursor = get_db_connection().cursor()
+    cursor.execute('SELECT 1 FROM player_eggs WHERE user_id = ? AND egg_id = ?', (user_id, egg_id))
+    if cursor.fetchone():
+        await context.bot.send_message(chat_id=user_id, text="❌ У тебя уже есть это яйцо!")
+        return
+
+    if player[3] < price:
+        await context.bot.send_message(chat_id=user_id, text="❌ Недостаточно YAIC!")
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('BEGIN TRANSACTION')
+        cursor.execute('UPDATE players SET balance = balance - ? WHERE user_id = ?', (price, user_id))
+        cursor.execute('UPDATE eggs SET current_count = current_count + 1 WHERE id = ?', (egg_id,))
+        cursor.execute('INSERT INTO player_eggs (user_id, egg_id, purchased_price) VALUES (?, ?, ?)',
+                       (user_id, egg_id, price))
+        new_price = int(price * 1.08)
+        cursor.execute('UPDATE eggs SET price = ? WHERE id = ?', (new_price, egg_id))
+        conn.commit()
+
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"🎉 <b>Поздравляем с покупкой!</b>\n\n<b>Вы купили:</b> {name}\n<b>Номер яйца:</b> #{current_count + 1} из {limit_count}\n<b>Цена покупки:</b> {price} YAIC\n<b>Следующее будет стоить:</b> {new_price} YAIC (+8%)",
+            parse_mode='HTML'
+        )
+
+        await show_egg_market(query, context)
+
+    except Exception as e:
+        conn.rollback()
+        await context.bot.send_message(chat_id=user_id, text="❌ Ошибка при покупке яйца")
+
+
+# === ОТКРЫТИЕ БОКСА — КУЛДАУН 2 МИН ===
+async def open_box_handler(query, context: ContextTypes.DEFAULT_TYPE, box_id):
+    user_id = query.from_user.id
+
+    can_open, remaining = can_open_box(user_id)
+    if not can_open:
+        minutes = remaining // 60
+        seconds = remaining % 60
+
+        # Создаем красивое сообщение о кулдауне
+        cooldown_message = (
+            f"⏰ <b>Кулдаун!</b>\n\n"
+            f"Вы недавно открывали бокс. Подождите еще:\n"
+            f"<b>{minutes:02d}:{seconds:02d}</b>\n\n"
+            f"💡 <i>Боксы можно открывать раз в 2 минуты</i>"
+        )
+
+        # Отправляем сообщение вместо alert
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=cooldown_message,
+            parse_mode='HTML'
+        )
+        return
+
+    # Получаем информацию о боксе для красивого сообщения
+    boxes = get_boxes()
+    box_name = ""
+    box_price = 0
+    for box in boxes:
+        if box[0] == box_id:
+            box_name = box[1]
+            box_price = box[2]
+            break
+
+    # Проверяем баланс перед открытием
+    player = get_player(user_id)
+    if player[3] < box_price:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=f"❌ <b>Недостаточно средств!</b>\n\n"
+                 f"Для открытия {box_name} нужно {box_price} YAIC\n"
+                 f"Ваш баланс: {player[3]} YAIC",
+            parse_mode='HTML'
+        )
+        return
+
+    # Показываем анимацию открытия
+    opening_message = await context.bot.send_message(
+        chat_id=user_id,
+        text=f"🎁 <b>Открываем {box_name}...</b>\n\n"
+             f"⏳ Подождите немного...",
+        parse_mode='HTML'
+    )
+
+    # Имитируем задержку для драматизма
+    await asyncio.sleep(2)
+
+    rewards = open_box(user_id, box_id)
+
+    # Удаляем сообщение об открытии
+    try:
+        await context.bot.delete_message(chat_id=user_id, message_id=opening_message.message_id)
+    except:
+        pass
+
+    if rewards is None:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ <b>Не удалось открыть бокс!</b>\n\n"
+                 "Возможные причины:\n"
+                 "• Недостаточно YAIC\n"
+                 "• Достигнут лимит яиц\n"
+                 "• Ошибка системы",
+            parse_mode='HTML'
+        )
+    else:
+        if rewards == ["Ничего не выпало"]:
+            rewards_text = (
+                "😔 <b>К сожалению, ничего не выпало...</b>\n\n"
+                "💫 Попробуйте еще раз - удача обязательно улыбнется!"
+            )
+        else:
+            rewards_text = "🎉 <b>Поздравляем! Вы получили:</b>\n\n" + "\n".join([f"🎁 {reward}" for reward in rewards])
+
+        # Добавляем информацию о следующем открытии
+        rewards_text += f"\n\n⏰ <i>Следующий бокс можно открыть через 2 минуты</i>"
+
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=rewards_text,
+            parse_mode='HTML'
+        )
+
+    set_box_cooldown(user_id)
 
 
 # Обработчик кнопок
@@ -1014,6 +1236,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_boxes_menu(query, context)
     elif data == "loans":
         await show_loans_menu(query, context)
+    elif data == "promo_codes":
+        await show_promo_codes_menu(query, context)
+    elif data == "enter_promo_code":
+        await ask_promo_code(query, context)
     elif data == "add_friend":
         await add_friend_handler(query, context)
     elif data.startswith("remove_friend_"):
@@ -1074,6 +1300,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_boxes_menu(query, context)
     elif data == "back_to_loans":
         await show_loans_menu(query, context)
+    elif data == "back_to_promo":
+        await show_promo_codes_menu(query, context)
     elif data == "sold_out":
         await context.bot.send_message(chat_id=user_id, text="❌ Это яйцо уже раскуплено!")
 
@@ -1083,7 +1311,7 @@ async def ask_nickname(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['awaiting_nickname'] = True
     await context.bot.send_message(
         chat_id=query.from_user.id,
-        text="🎮 Введи свой игровой ник (2-20 символов):"
+        text="👤 Введи свой игровой ник (2-20 символов):"
     )
 
 
@@ -1093,6 +1321,15 @@ async def ask_loan_amount(query, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id=query.from_user.id,
         text="💵 Введите сумму кредита (от 1,000 до 50,000 YAIC):"
+    )
+
+
+# Запрос промокода
+async def ask_promo_code(query, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['awaiting_promo_code'] = True
+    await context.bot.send_message(
+        chat_id=query.from_user.id,
+        text="🎫 Введите промокод:"
     )
 
 
@@ -1154,6 +1391,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['awaiting_loan_amount'] = False
         await show_loans_menu(update, context)
 
+    elif context.user_data.get('awaiting_promo_code'):
+        code = update.message.text.strip().upper()
+        success, message = use_promo_code(user_id, code)
+        await update.message.reply_text(message)
+        context.user_data['awaiting_promo_code'] = False
+        await show_promo_codes_menu(update, context)
+
 
 # Личный кабинет
 async def show_dashboard(update, context: ContextTypes.DEFAULT_TYPE):
@@ -1177,19 +1421,19 @@ async def show_dashboard(update, context: ContextTypes.DEFAULT_TYPE):
     loan_info = get_loan_info(user_id)
     loan_text = ""
     if loan_info['has_loan']:
-        loan_text = f"📉 Кредит: {loan_info['remaining']} YAIC\n"
+        loan_text = f"📊 Кредит: {loan_info['remaining']} YAIC\n"
 
     text = f"""
-🏠 Личный кабинет
+🏠 <b>Личный кабинет</b>
 
 👤 Игрок: {nickname}
-💰 Баланс: {balance} YAIC
+💵 Баланс: {balance} YAIC
 {loan_text}📈 Пассивный доход: {total_income_per_30min} YAIC/30мин
 🏢 Бизнесов: {len(player_businesses)}
 🥚 Яиц: {len(get_player_eggs(user_id))}
 👥 Друзей: {len(get_friends(user_id))}
 
-Выберите действие:
+🎯 Выберите действие:
     """
 
     keyboard = [
@@ -1200,37 +1444,38 @@ async def show_dashboard(update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 Трейды", callback_data="trades")],
         [InlineKeyboardButton("📦 Боксы", callback_data="boxes")],
         [InlineKeyboardButton("💰 Кредиты", callback_data="loans")],
+        [InlineKeyboardButton("🎫 Промокоды", callback_data="promo_codes")],
         [InlineKeyboardButton("🏆 Топ игроков", callback_data="top_players")],
-        [InlineKeyboardButton("📚 Инструкция", callback_data="instructions")]
+        [InlineKeyboardButton("📖 Инструкция", callback_data="instructions")]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if hasattr(update, 'message'):
-        await update.message.reply_text(text, reply_markup=reply_markup)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
     else:
-        await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup)
+        await context.bot.send_message(chat_id=user_id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 # Топ игроков
 async def show_top_players(query, context: ContextTypes.DEFAULT_TYPE):
     top_players = get_top_players()
 
-    text = "🏆 Топ 10 игроков\n\n"
+    text = "🏆 <b>Топ 10 игроков</b>\n\n"
 
     if not top_players:
-        text += "Пока нет игроков в рейтинге"
+        text += "😔 Пока нет игроков в рейтинге"
     else:
         for i, (nickname, balance, income) in enumerate(top_players, 1):
             income = income or 0
             medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
             text += f"{medal} {nickname}\n"
-            text += f"   💰 {balance} YAIC | 📈 {income} YAIC/30мин\n\n"
+            text += f"   💵 {balance} YAIC | 📈 {income} YAIC/30мин\n\n"
 
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="dashboard")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 # Магазин бизнесов
@@ -1240,23 +1485,23 @@ async def show_businesses(query, context: ContextTypes.DEFAULT_TYPE):
     player = get_player(user_id)
     balance = player[3] if player else 0
 
-    text = f"🏢 Магазин бизнесов\n\n💰 Ваш баланс: {balance} YAIC\n\n"
+    text = f"🏢 <b>Магазин бизнесов</b>\n\n💵 Ваш баланс: {balance} YAIC\n\n"
     keyboard = []
 
     for business in businesses:
         id, name, price, income, description = business
         can_afford = "✅" if balance >= price else "❌"
         text += f"{can_afford} {name}\n"
-        text += f"   💵 Цена: {price} YAIC\n"
+        text += f"   💰 Цена: {price} YAIC\n"
         text += f"   📈 Доход: {income} YAIC/30мин\n"
         text += f"   📝 {description}\n\n"
 
-        keyboard.append([InlineKeyboardButton(f"🛒 {name} - {price}YAIC", callback_data=f"business_{id}")])
+        keyboard.append([InlineKeyboardButton(f"{name} - {price}YAIC", callback_data=f"business_{id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="dashboard")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def buy_business(query, context: ContextTypes.DEFAULT_TYPE, business_id):
@@ -1308,30 +1553,30 @@ async def show_egg_market(query, context: ContextTypes.DEFAULT_TYPE):
     player = get_player(user_id)
     balance = player[3] if player else 0
 
-    text = f"🥚 Рынок яиц\n\n💰 Ваш баланс: {balance} YAIC\n\n"
+    text = f"🥚 <b>Рынок яиц</b>\n\n💵 Ваш баланс: {balance} YAIC\n\n"
     keyboard = []
 
     for egg in eggs:
         id, name, price, image_file_id, description, limit_count, current_count, base_price, last_restock = egg
         available = limit_count - current_count
-        status = "🟢" if available > 0 else "🔴"
+        status = "✅ Доступно" if available > 0 else "❌ Раскуплено"
 
         price_increase = ((price - base_price) / base_price) * 100
         price_info = f" (+{price_increase:.1f}%)" if price > base_price else ""
 
         text += f"{status} {name}\n"
-        text += f"   💵 Цена: {price} YAIC{price_info}\n"
+        text += f"   💰 Цена: {price} YAIC{price_info}\n"
         text += f"   📊 Доступно: {available}/{limit_count}\n\n"
 
         if available > 0:
             keyboard.append([InlineKeyboardButton(f"{name} - {price}YAIC", callback_data=f"egg_detail_{id}")])
         else:
-            keyboard.append([InlineKeyboardButton(f"❌ {name} - Раскуплено", callback_data="sold_out")])
+            keyboard.append([InlineKeyboardButton(f"{name} - Раскуплено", callback_data="sold_out")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="dashboard")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def show_egg_details(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
@@ -1350,16 +1595,14 @@ async def show_egg_details(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
     available = limit_count - current_count
 
     if image_file_id:
-        # Отправляем картинку с описанием
         await context.bot.send_photo(
             chat_id=query.from_user.id,
             photo=image_file_id,
-            caption=f"<b>{name}</b>\n\n💵 <b>Цена:</b> {price} YAIC\n📊 <b>Доступно:</b> {available}/{limit_count}\n📝 <b>Описание:</b> {description}",
+            caption=f"<b>{name}</b>\n\n💰 <b>Цена:</b> {price} YAIC\n📊 <b>Доступно:</b> {available}/{limit_count}\n📝 <b>Описание:</b> {description}",
             parse_mode='HTML'
         )
     else:
-        # Если картинки нет, отправляем просто текст
-        text = f"<b>{name}</b>\n\n💵 <b>Цена:</b> {price} YAIC\n📊 <b>Доступно:</b> {available}/{limit_count}\n📝 <b>Описание:</b> {description}"
+        text = f"<b>{name}</b>\n\n💰 <b>Цена:</b> {price} YAIC\n📊 <b>Доступно:</b> {available}/{limit_count}\n📝 <b>Описание:</b> {description}"
         await context.bot.send_message(
             chat_id=query.from_user.id,
             text=text,
@@ -1387,62 +1630,11 @@ async def show_egg_details(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
         )
 
 
-async def buy_egg(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
-    user_id = query.from_user.id
-    player = get_player(user_id)
-
-    eggs = get_eggs()
-    egg = None
-    for e in eggs:
-        if e[0] == egg_id:
-            egg = e
-            break
-
-    if not egg:
-        await context.bot.send_message(chat_id=user_id, text="❌ Яйцо не найдено!")
-        return
-
-    id, name, price, image_file_id, description, limit_count, current_count, base_price, last_restock = egg
-
-    if current_count >= limit_count:
-        await context.bot.send_message(chat_id=user_id, text="❌ Это яйцо уже раскуплено!")
-        return
-
-    if player[3] < price:
-        await context.bot.send_message(chat_id=user_id, text="❌ Недостаточно YAIC!")
-        return
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute('BEGIN TRANSACTION')
-        cursor.execute('UPDATE players SET balance = balance - ? WHERE user_id = ?', (price, user_id))
-        cursor.execute('UPDATE eggs SET current_count = current_count + 1 WHERE id = ?', (egg_id,))
-        cursor.execute('INSERT INTO player_eggs (user_id, egg_id, purchased_price) VALUES (?, ?, ?)',
-                       (user_id, egg_id, price))
-        new_price = int(price * 1.08)
-        cursor.execute('UPDATE eggs SET price = ? WHERE id = ?', (new_price, egg_id))
-        conn.commit()
-
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"✅ <b>Поздравляем с покупкой!</b>\n\n🎉 <b>Вы купили:</b> {name}\n🔢 <b>Номер яйца:</b> #{current_count + 1} из {limit_count}\n💵 <b>Цена покупки:</b> {price} YAIC\n📈 <b>Следующее будет стоить:</b> {new_price} YAIC (+8%)",
-            parse_mode='HTML'
-        )
-
-        await show_egg_market(query, context)
-
-    except Exception as e:
-        conn.rollback()
-        await context.bot.send_message(chat_id=user_id, text="❌ Ошибка при покупке яйца")
-
-
 # ИНВЕНТАРЬ С КНОПКОЙ СБОРА ДОХОДА
 async def show_inventory_menu(query, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
-    text = "🎒 Ваш инвентарь\n\nВыберите раздел для просмотра:"
+    text = "🎒 <b>Ваш инвентарь</b>\n\nВыберите раздел для просмотра:"
 
     keyboard = [
         [InlineKeyboardButton("🥚 Мои яйца", callback_data="inventory_eggs")],
@@ -1453,7 +1645,7 @@ async def show_inventory_menu(query, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def collect_income_handler(query, context: ContextTypes.DEFAULT_TYPE):
@@ -1463,23 +1655,26 @@ async def collect_income_handler(query, context: ContextTypes.DEFAULT_TYPE):
     if status == "ready" and income > 0:
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"💰 Вы собрали доход: {income} YAIC!\nСледующий сбор через 30 минут."
+            text=f"💰 <b>Вы собрали доход: {income} YAIC!</b>\n⏰ Следующий сбор через 30 минут.",
+            parse_mode='HTML'
         )
     elif status == "no_businesses":
         await context.bot.send_message(
             chat_id=user_id,
-            text="❌ У вас нет бизнесов для сбора дохода!\n\nПриобретите бизнесы в магазине."
+            text="❌ <b>У вас нет бизнесов для сбора дохода!</b>\n\n🏢 Приобретите бизнесы в магазине.",
+            parse_mode='HTML'
         )
     elif status.startswith("wait_"):
         minutes_remaining = status.split("_")[1]
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"⏰ До следующего сбора дохода осталось: {minutes_remaining} минут\n\nДоход накапливается каждые 30 минут."
+            text=f"⏰ <b>До следующего сбора дохода осталось: {minutes_remaining} минут</b>\n\n📈 Доход накапливается каждые 30 минут.",
+            parse_mode='HTML'
         )
     else:
         await context.bot.send_message(
             chat_id=user_id,
-            text="ℹ️ Нет дохода для сбора."
+            text="❌ Нет дохода для сбора."
         )
 
     await show_inventory_menu(query, context)
@@ -1490,19 +1685,19 @@ async def show_business_inventory(query, context: ContextTypes.DEFAULT_TYPE):
     businesses = get_player_businesses(user_id)
 
     if not businesses:
-        text = "📭 У вас пока нет бизнесов\n\nНачните с покупки первого бизнеса в магазине!"
+        text = "❌ <b>У вас пока нет бизнесов</b>\n\n🏢 Начните с покупки первого бизнеса в магазине!"
     else:
-        text = "🏢 Ваши бизнесы\n\n"
+        text = "🏢 <b>Ваши бизнесы</b>\n\n"
         total_income = 0
 
         for business_id, name, income, purchased_at in businesses:
             total_income += income
-            text += f"🏪 {name}\n"
+            text += f"{name}\n"
             text += f"   📈 Доход: {income} YAIC/30мин\n"
             text += f"   💰 Продажа: {int(income * 10 * 0.7)} YAIC\n\n"
 
-        text += f"💵 Суммарный доход: {total_income} YAIC/30мин\n\n"
-        text += "Выберите действие:"
+        text += f"📊 <b>Суммарный доход:</b> {total_income} YAIC/30мин\n\n"
+        text += "🎯 Выберите действие:"
 
     keyboard = []
     if businesses:
@@ -1513,7 +1708,7 @@ async def show_business_inventory(query, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back_to_inventory")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def show_egg_inventory(query, context: ContextTypes.DEFAULT_TYPE):
@@ -1521,9 +1716,9 @@ async def show_egg_inventory(query, context: ContextTypes.DEFAULT_TYPE):
     eggs = get_player_eggs(user_id)
 
     if not eggs:
-        text = "📭 У вас пока нет яиц\n\nПриобретите свои первые яйца на рынке!"
+        text = "❌ <b>У вас пока нет яиц</b>\n\n🥚 Приобретите свои первые яйца на рынке!"
     else:
-        text = "🥚 Ваша коллекция яиц\n\n"
+        text = "🥚 <b>Ваша коллекция яиц</b>\n\n"
         total_value = 0
         total_profit = 0
 
@@ -1537,13 +1732,13 @@ async def show_egg_inventory(query, context: ContextTypes.DEFAULT_TYPE):
             profit_percent = ((current_price - purchased_price) / purchased_price) * 100 if purchased_price > 0 else 0
 
             text += f"<b>{name}</b>\n"
-            text += f"   💵 Текущая цена: {current_price} YAIC\n"
+            text += f"   💰 Текущая цена: {current_price} YAIC\n"
             text += f"   📈 Прибыль: {profit} YAIC ({profit_percent:+.1f}%)\n"
-            text += f"   🔢 Количество: {count}\n\n"
+            text += f"   📊 Количество: {count}\n\n"
 
-        text += f"💎 <b>Общая стоимость:</b> {total_value} YAIC\n"
-        text += f"🎯 <b>Общая прибыль:</b> {total_profit} YAIC\n\n"
-        text += "Выберите действие:"
+        text += f"<b>💎 Общая стоимость:</b> {total_value} YAIC\n"
+        text += f"<b>📈 Общая прибыль:</b> {total_profit} YAIC\n\n"
+        text += "🎯 Выберите действие:"
 
     keyboard = []
     if eggs:
@@ -1571,7 +1766,8 @@ async def sell_business_handler(query, context: ContextTypes.DEFAULT_TYPE, busin
     if sell_price:
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"✅ Бизнес продан за {sell_price} YAIC!"
+            text=f"✅ <b>Бизнес продан за {sell_price} YAIC!</b>",
+            parse_mode='HTML'
         )
     else:
         await context.bot.send_message(
@@ -1589,7 +1785,8 @@ async def sell_egg_handler(query, context: ContextTypes.DEFAULT_TYPE, egg_id):
     if sell_price:
         await context.bot.send_message(
             chat_id=user_id,
-            text=f"✅ Яйцо продано за {sell_price} YAIC!"
+            text=f"✅ <b>Яйцо продано за {sell_price} YAIC!</b>",
+            parse_mode='HTML'
         )
     else:
         await context.bot.send_message(
@@ -1605,16 +1802,16 @@ async def show_friends_menu(query, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     friends = get_friends(user_id)
 
-    text = "👥 Система друзей\n\n"
+    text = "👥 <b>Система друзей</b>\n\n"
 
     if not friends:
-        text += "У вас пока нет друзей.\n\nДобавьте друзей по их ID пользователя!"
+        text += "😔 У вас пока нет друзей.\n\n👤 Добавьте друзей по их ID пользователя!"
     else:
-        text += "Ваши друзья:\n"
+        text += "✅ <b>Ваши друзья:</b>\n"
         for friend_id, nickname in friends:
-            text += f"👤 {nickname} (ID: {friend_id})\n"
+            text += f"{nickname} (ID: {friend_id})\n"
 
-    text += "\nВыберите действие:"
+    text += "\n🎯 Выберите действие:"
 
     keyboard = [
         [InlineKeyboardButton("➕ Добавить друга", callback_data="add_friend")],
@@ -1628,14 +1825,14 @@ async def show_friends_menu(query, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def add_friend_handler(query, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     context.user_data['awaiting_friend_id'] = True
 
-    text = """👥 Добавление друга
+    text = """👥 <b>Добавление друга</b>
 
 Чтобы добавить друга, вам нужно знать его ID пользователя.
 
@@ -1646,7 +1843,7 @@ async def add_friend_handler(query, context: ContextTypes.DEFAULT_TYPE):
 
 Затем введите ID друга:"""
 
-    await context.bot.send_message(chat_id=user_id, text=text)
+    await context.bot.send_message(chat_id=user_id, text=text, parse_mode='HTML')
 
 
 async def remove_friend_handler(query, context: ContextTypes.DEFAULT_TYPE, friend_id):
@@ -1661,17 +1858,17 @@ async def show_trades_menu(query, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     pending_trades = get_pending_trades(user_id)
 
-    text = "🔄 Система трейдов\n\n"
+    text = "🔄 <b>Система трейдов</b>\n\n"
 
     if not pending_trades:
-        text += "У вас нет ожидающих трейдов\n\n"
+        text += "😔 У вас нет ожидающих трейдов\n\n"
     else:
-        text += "Ожидающие трейды:\n"
+        text += "⏳ <b>Ожидающие трейды:</b>\n"
         for trade_id, from_user_id, to_user_id, item_type, item_id, price, nickname, item_name in pending_trades:
-            text += f"📦 {nickname} предлагает {item_name} за {price} YAIC\n"
+            text += f"{nickname} предлагает {item_name} за {price} YAIC\n"
         text += "\n"
 
-    text += "Выберите действие:"
+    text += "🎯 Выберите действие:"
 
     keyboard = []
     if pending_trades:
@@ -1685,7 +1882,7 @@ async def show_trades_menu(query, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def create_business_trade_handler(query, context: ContextTypes.DEFAULT_TYPE, business_id):
@@ -1700,14 +1897,14 @@ async def create_business_trade_handler(query, context: ContextTypes.DEFAULT_TYP
 
     keyboard = []
     for friend_id, nickname in friends:
-        keyboard.append([InlineKeyboardButton(f"👤 {nickname}", callback_data=f"select_friend_{friend_id}")])
+        keyboard.append([InlineKeyboardButton(f"{nickname}", callback_data=f"select_friend_{friend_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="inventory_businesses")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await context.bot.send_message(
         chat_id=user_id,
-        text="Выберите друга для обмена:",
+        text="👥 Выберите друга для обмена:",
         reply_markup=reply_markup
     )
 
@@ -1724,14 +1921,14 @@ async def create_egg_trade_handler(query, context: ContextTypes.DEFAULT_TYPE, eg
 
     keyboard = []
     for friend_id, nickname in friends:
-        keyboard.append([InlineKeyboardButton(f"👤 {nickname}", callback_data=f"select_friend_{friend_id}")])
+        keyboard.append([InlineKeyboardButton(f"{nickname}", callback_data=f"select_friend_{friend_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="inventory_eggs")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await context.bot.send_message(
         chat_id=user_id,
-        text="Выберите друга для обмена:",
+        text="👥 Выберите друга для обмена:",
         reply_markup=reply_markup
     )
 
@@ -1763,7 +1960,7 @@ async def select_friend_handler(query, context: ContextTypes.DEFAULT_TYPE, frien
 
     await context.bot.send_message(
         chat_id=user_id,
-        text=f"💵 Введите цену в YAIC для {item_name}:\n\n(Минимальная цена: 1 YAIC)"
+        text=f"💰 Введите цену в YAIC для {item_name}:\n\n(Минимальная цена: 1 YAIC)"
     )
 
 
@@ -1792,44 +1989,25 @@ async def show_boxes_menu(query, context: ContextTypes.DEFAULT_TYPE):
     player = get_player(user_id)
     balance = player[3] if player else 0
 
-    text = f"📦 Система боксов\n\n💰 Ваш баланс: {balance} YAIC\n\n"
+    text = f"📦 <b>Система боксов</b>\n\n💵 Ваш баланс: {balance} YAIC\n\n"
 
     for box in boxes:
         box_id, name, price, rewards = box
         text += f"{name}\n"
-        text += f"   💵 Цена: {price} YAIC\n"
+        text += f"   💰 Цена: {price} YAIC\n"
         text += f"   🎁 Возможные награды: {rewards}\n\n"
 
-    text += "Выберите бокс для открытия:"
+    text += "🎯 Выберите бокс для открытия:"
 
     keyboard = []
     for box in boxes:
         box_id, name, price, _ = box
-        keyboard.append([InlineKeyboardButton(f"🎁 {name} - {price}YAIC", callback_data=f"open_box_{box_id}")])
+        keyboard.append([InlineKeyboardButton(f"{name} - {price}YAIC", callback_data=f"open_box_{box_id}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="dashboard")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
-
-
-async def open_box_handler(query, context: ContextTypes.DEFAULT_TYPE, box_id):
-    user_id = query.from_user.id
-    rewards = open_box(user_id, box_id)
-
-    if rewards:
-        rewards_text = "\n".join([f"🎁 {reward}" for reward in rewards])
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"🎉 Поздравляем! Вы открыли бокс и получили:\n\n{rewards_text}"
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ Не удалось открыть бокс. Проверьте баланс или доступность яиц."
-        )
-
-    await show_boxes_menu(query, context)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 # СИСТЕМА КРЕДИТОВ
@@ -1839,27 +2017,27 @@ async def show_loans_menu(query, context: ContextTypes.DEFAULT_TYPE):
     player = get_player(user_id)
     balance = player[3] if player else 0
 
-    text = f"💰 Система кредитов\n\n💵 Ваш баланс: {balance} YAIC\n\n"
+    text = f"💰 <b>Система кредитов</b>\n\n💵 Ваш баланс: {balance} YAIC\n\n"
 
     if loan_info['has_loan']:
-        text += f"📊 Текущий кредит:\n"
+        text += f"📊 <b>Текущий кредит:</b>\n"
         text += f"   💰 Сумма: {loan_info['amount']} YAIC\n"
         text += f"   📈 Процент: {loan_info['interest_rate']}%\n"
-        text += f"   📉 Осталось выплатить: {loan_info['remaining']} YAIC\n\n"
-        text += "Выберите действие:"
+        text += f"   ⏳ Осталось выплатить: {loan_info['remaining']} YAIC\n\n"
+        text += "🎯 Выберите действие:"
 
         keyboard = [
-            [InlineKeyboardButton("💳 Внести 1,000 YAIC", callback_data="repay_loan_1000")],
-            [InlineKeyboardButton("💳 Внести 5,000 YAIC", callback_data="repay_loan_5000")],
-            [InlineKeyboardButton("💳 Внести 10,000 YAIC", callback_data="repay_loan_10000")],
-            [InlineKeyboardButton("💳 Внести всю сумму", callback_data=f"repay_loan_{loan_info['remaining']}")],
+            [InlineKeyboardButton("💵 Внести 1,000 YAIC", callback_data="repay_loan_1000")],
+            [InlineKeyboardButton("💵 Внести 5,000 YAIC", callback_data="repay_loan_5000")],
+            [InlineKeyboardButton("💵 Внести 10,000 YAIC", callback_data="repay_loan_10000")],
+            [InlineKeyboardButton("💵 Внести всю сумму", callback_data=f"repay_loan_{loan_info['remaining']}")],
             [InlineKeyboardButton("🔙 Назад", callback_data="dashboard")]
         ]
     else:
         text += "💳 Вы можете взять кредит под 20% годовых\n\n"
-        text += "Максимальная сумма: 50,000 YAIC\n"
-        text += "Минимальная сумма: 1,000 YAIC\n\n"
-        text += "Выберите сумму кредита:"
+        text += "📊 Максимальная сумма: 50,000 YAIC\n"
+        text += "📊 Минимальная сумма: 1,000 YAIC\n\n"
+        text += "🎯 Выберите сумму кредита:"
 
         keyboard = [
             [InlineKeyboardButton("💵 Взять 5,000 YAIC", callback_data="take_loan_5000")],
@@ -1872,7 +2050,7 @@ async def show_loans_menu(query, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 async def take_loan_handler(query, context: ContextTypes.DEFAULT_TYPE, amount):
@@ -1889,60 +2067,100 @@ async def repay_loan_handler(query, context: ContextTypes.DEFAULT_TYPE, amount):
     await show_loans_menu(query, context)
 
 
+# СИСТЕМА ПРОМОКОДОВ
+async def show_promo_codes_menu(query, context: ContextTypes.DEFAULT_TYPE):
+    user_id = query.from_user.id
+    active_codes = get_active_codes()
+
+    text = "🎫 <b>Система промокодов</b>\n\n"
+
+    if active_codes:
+        text += "✅ <b>Активные коды:</b>\n"
+        for code, reward_type, reward_value, reward_item, uses_left, expires_at in active_codes:
+            expires_date = datetime.fromisoformat(expires_at).strftime("%d.%m.%Y")
+            if reward_type == 'yaic':
+                reward_text = f"{reward_value} YAIC"
+            else:
+                reward_text = reward_item
+            text += f"🎁 <b>{code}</b> - {reward_text} (осталось: {uses_left}, до: {expires_date})\n"
+        text += "\n"
+
+    text += "🎯 Выберите действие:"
+
+    keyboard = [
+        [InlineKeyboardButton("🎫 Ввести промокод", callback_data="enter_promo_code")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="dashboard")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
+
+
+async def enter_promo_code_handler(query, context: ContextTypes.DEFAULT_TYPE):
+    await ask_promo_code(query, context)
+
+
 # Инструкция
 async def show_instructions(query, context: ContextTypes.DEFAULT_TYPE):
     text = """
-📚 Инструкция по игре "Яйца Бизнес"
+📖 <b>Инструкция по игре "Яйца Бизнес"</b>
 
-🎯 Как начать:
-1. Нажми "Начать игру"
+🎮 <b>Как начать:</b>
+1. Нажми "🎮 Начать игру"
 2. Придумай ник
 3. Начни покупать бизнесы
 
-💼 Бизнесы:
+🏢 <b>Бизнесы:</b>
 - Можно купить только 1 экземпляр каждого бизнеса
 - Приносят пассивный доход каждые 30 минут
 - Доход в валюте YAIC
 - Можно продать за 70% от цены покупки
 
-🥚 Яйца хайпа:
+🥚 <b>Яйца хайпа:</b>
 - 4 типа уникальных яиц с картинками
 - Ограниченное количество каждого типа
 - После каждой покупки цена растет на 8%
 - Каждую неделю тираж пополняется
 - Можно продать за 80% от текущей цены
 
-👥 Система друзей:
+👥 <b>Система друзей:</b>
 - Добавляйте друзей по ID
 - Обменивайтесь яйцами и бизнесами
 
-🔄 Трейды:
+🔄 <b>Трейды:</b>
 - Предлагайте друзьям обмен
 - Устанавливайте свою цену
 - Принимайте или отклоняйте предложения
 
-📦 Боксы:
+📦 <b>Боксы:</b>
 - Открывайте за YAIC
 - Случайные награды (YAIC, яйца)
 - Разные уровни боксов
+- Кулдаун 2 минуты между открытиями
 
-💰 Кредиты:
+💰 <b>Кредиты:</b>
 - Берите кредиты под 20%
 - Максимум 50,000 YAIC
 - Выплачивайте вовремя
 
-💵 Сбор дохода:
+🎫 <b>Промокоды:</b>
+- Следите за каналом с анонсами
+- Вводите коды для получения наград
+- Коды ограничены по времени и количеству использований
+
+⏰ <b>Сбор дохода:</b>
 - Доход накапливается каждые 30 минут
 - Собирайте в инвентаре
 - Если 30 минут не прошло - покажет таймер
 
-Удачи в построении бизнес-империи! 🚀
+🚀 <b>Удачи в построении бизнес-империи!</b>
     """
 
     keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="dashboard")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup)
+    await context.bot.send_message(chat_id=query.from_user.id, text=text, reply_markup=reply_markup, parse_mode='HTML')
 
 
 # Основная функция
@@ -1952,21 +2170,24 @@ def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("give_yaic", admin_give_yaic))
+    application.add_handler(CommandHandler("create_code", admin_create_code))
     application.add_handler(CommandHandler("upload_images", upload_images))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🎮 Бот 'Яйца Бизнес' запущен!")
-    print("💰 Валюта: YAIC")
+    print("💵 Валюта: YAIC")
     print("🏢 Бизнесы: можно купить только 1 экземпляр")
     print("🥚 4 типа яиц: Обычное, Золотое, Алмазное, Мемное")
-    print("📦 Боксы с пониженной везучестью")
+    print("📦 Боксы с пониженной везучестью и кулдауном 2 минуты")
     print("⏰ Таймер сбора дохода: 30 минут")
-    print("💳 Система кредитов под 20%")
+    print("💰 Система кредитов под 20%")
     print("🔄 Система трейдов")
-    print("📸 Для загрузки картинок используй команду /upload_images")
+    print("🎫 Система промокодов")
+    print("👥 Реферальная система")
 
-    print("🔄 Бот запускается...")
+    print("🚀 Бот запускается...")
     application.run_polling()
 
 
