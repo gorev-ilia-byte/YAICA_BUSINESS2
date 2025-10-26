@@ -564,7 +564,7 @@ def open_box(user_id, box_id):
                 elif 'Алмазных' in reward:
                     egg_type = "💎 Алмазное яйцо"
                     egg_chance = 15  # 15% шанс
-                elif 'Мемных' in reward:  # ← ИСПРАВЛЕНО: 'в' на 'in'
+                elif 'Мемных' in reward:
                     egg_type = "🔥 Мемное яйцо"
                     egg_chance = 5  # 5% шанс
                 else:
@@ -1062,9 +1062,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
         if not player:
-            create_player(user_id, username, None, referrer_id)
-            if process_referral(user_id, referrer_id):
-                await update.message.reply_text("👥 Рефералка: +5000 YAIC тебе и другу!")
+            # Запрашиваем ник через кнопку, не создаем игрока сразу
+            keyboard = [[InlineKeyboardButton("🎮 Начать игру", callback_data="start_game")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "🎉 Добро пожаловать в игру 'Яйца Бизнес'! \n\n"
+                "💼 Строй бизнес, 🥚 покупай редкие яйца и становись самым богатым игроком!",
+                reply_markup=reply_markup
+            )
+            return
 
 
 # === ПОКУПКА ЯЙЦА — 1 НА ТИП ===
